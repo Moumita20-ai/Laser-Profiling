@@ -1,0 +1,69 @@
+
+#include <opencv2/opencv.hpp>
+#include <vector>
+
+int main() {
+    cv::Mat img = cv::imread("35.jpeg");
+    int row = img.rows;
+    int column = img.cols;
+
+    std::vector<cv::Mat> bgr_planes;
+    cv::split(img, bgr_planes);
+
+    cv::Mat new_red(row, column, CV_8UC1, cv::Scalar(0));
+
+    for (int ia = 0; ia < row; ia++) {
+        for (int ja = 0; ja < column; ja++) {
+            int rp = bgr_planes[2].at<uchar>(ia, ja);
+            int gp = bgr_planes[1].at<uchar>(ia, ja);
+            int bp = bgr_planes[0].at<uchar>(ia, ja);
+
+            if (rp > 100 && gp > 100 && bp > 100) {
+                new_red.at<uchar>(ia, ja) = 0;
+            } else if (rp > gp && rp > bp) {
+                new_red.at<uchar>(ia, ja) = 255;
+            } else {
+                new_red.at<uchar>(ia, ja) = 0;
+            }
+        }
+    }
+
+    cv::imshow("a.jpg", img);
+    cv::imshow("c.jpg", new_red);
+    cv::waitKey();
+    cv::destroyAllWindows();
+
+    std::vector<std::vector<cv::Point>> contours;
+    cv::findContours(new_red, contours, cv::RETR_EXTERNAL, cv::CHAIN_APPROX_SIMPLE);
+
+    std::vector<double> A;
+    std::vector<std::vector<int>> R;
+
+    for (const auto& cntr1 : contours) {
+        cv::Rect rect = cv::boundingRect(cntr1);
+        double area = cv::contourArea(cntr1);
+        A.push_back(area);
+        R.push_back({rect.x, rect.y, rect.x + rect.width, rect.y + rect.height});
+    }
+
+    std::vector<double> A1 = A;
+    std::vector<std::vector<int>> R1 = R;
+
+    for (int i = 0; i < contours.size(); i++) {
+        if (A1[i] < 30000 || A1[i] > 33000) {
+            cv::Rect rect(R1[i][0], R1[i][1], R1[i][2] - R1[i][0], R1[i][3] - R1[i][1]);
+            new_red(rect) = 0;
+        } else {
+            cv::Rect rect(R1[i][0], R1[i][1], R1[i][2] - R1[i][0], R1[i][3] - R1[i][1]);
+            cv::Mat img_crop1 = new_red(rect);
+            cv::imshow("b.jpg", img_crop1);
+            cv::waitKey();
+            cv::destroyAllWindows();
+        }
+    }
+
+    std::sort(A1.begin(), A1.end());
+
+    return 0;
+}
+

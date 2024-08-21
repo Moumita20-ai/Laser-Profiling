@@ -1,0 +1,219 @@
+
+#include <opencv2/opencv.hpp>
+#include <Eigen/Dense>
+#include <cmath>
+#include <vector>
+#include <string>
+#include <filesystem>
+
+namespace fs = std::filesystem;
+
+double PPM = 1.364864864864865;
+
+std::vector<double> R_pix;
+std::vector<double> D_mm;
+std::vector<double> Ovality_all;
+std::vector<double> Cal_rad;
+std::vector<double> Rratio;
+
+cv::Mat processImage(const std::string& input_path, const std::string& output_img_path) {
+    std::vector<std::string> img_list;
+    for (const auto& entry : fs::directory_iterator(input_path)) {
+        img_list.push_back(entry.path().filename().string());
+    }
+
+    int img_size = 0;
+
+    for (size_t ind = 0; ind < img_list.size(); ind++) {
+        std::vector<double> combine_rad;
+        std::vector<double> sub_rad_dis;
+        std::vector<double> mul_dia_mm;
+        std::vector<double> mul_rad_pix;
+        std::vector<double> multiple_xc;
+        std::vector<double> multiple_yc;
+
+        cv::Mat img = cv2::imread(input_path + img_list[ind]);
+        int row = img.rows, column = img.cols;
+
+        cv::Mat blue, green, red;
+        cv::split(img, {blue, green, red});
+        cv::Mat new_red = cv::Mat::zeros(row, column, CV_8UC1);
+
+        for (int ia = 0; ia < row; ia++) {
+            for (int ja = 0; ja < column; ja++) {
+                int rp = red.at<uchar>(ia, ja);
+                int gp = green.at<uchar>(ia, ja);
+                int bp = blue.at<uchar>(ia, ja);
+
+                if (rp > 200 && gp > 200 && bp > 200) {
+                    new_red.at<uchar>(ia, ja) = 0;
+                } else if (rp > 220 && (gp < 200 && bp < 200)) {
+                    new_red.at<uchar>(ia, ja) = 255;
+                } else {
+                    new_red.at<uchar>(ia, ja) = 0;
+                }
+            }
+        }
+
+        std::vector<cv::Point> xy_coords2;
+        cv::findNonZero(new_red, xy_coords2);
+        std::vector<cv::Point2d> xy_coords(xy_coords2.begin(), xy_coords2.end());
+
+        double xc, yc, r;
+        cv::fitEllipse(xy_coords).center.x;
+        cv::fitEllipse(xy_coords).center.y;
+        cv::fitEllipse(xy_coords).size.width / 2;
+
+        for (size_t ib = 0; ib < xy_coords.size(); ib++) {
+            double calcu_rad = std::sqrt(std::pow(xy_coords[ib].x - xc, 2) + std::pow(xy_coords[ib].y - yc, 2));
+            combine_rad.push_back(calcu_rad);
+            cv::circle(img, xy_coords[ib], 1, cv::Scalar(100, 255, 150), -1);
+        }
+
+        cv::circle(img, cv::Point(static_cast<int>(xc), static_cast<int>(yc)), static_cast<int>(r), cv::Scalar(255, 0, 0), 2);
+
+        cv::Mat sample_img = cv::Mat::zeros(720, 1280, CV_8UC1);
+        cv::circle(sample_img, cv::Point(static_cast<int>(xc), static_cast<int>(yc)), static_cast<int>(r), cv::Scalar(255, 0, 0), 2);
+        std::vector<std::vector<cv::Point>> contours1;
+        cv::findContours(sample_img, contours1, cv::RETR_EXTERNAL, cv::CHAIN_APPROX_SIMPLE);
+        int x1, y1, w1, h1;
+        for (const auto& cntr11 : contours1) {
+            cv::Rect rect = cv::boundingRect(cntr11);
+            x1 = rect.x;
+            y1 = rect.y;
+            w1 = rect.width;
+            h1 = rect.height;
+        }
+
+        cv::Mat img_crop1 = sample_img(cv::Rect(x1, y1, w1, h1));
+
+        if (img_size == 0) {
+            img_size = img_crop1.rows;
+        }
+
+        cv::Mat img_crop;
+        cv::resize(img_crop1, img_crop, cv::Size(img_size, img_size), cv::INTER_CUBIC);
+
+        cv::Mat source_img = img_crop.clone();
+
+        cv::Mat dst_img = cv::imread("background_removal_crop.jpg", cv::IMREAD_COLOR);
+        int S_shape = source_img.rows;
+        int D_shape = (dst_img.rows + dst_img.cols) / 2;
+        int y_d = dst_img.rows, x_d = dst_img.cols;
+
+        double ratio = static_cast<double>(S_shape) / static_cast<double>(D_shape);
+        Rratio.push_back(ratio);
+
+        Eigen::Matrix<double, 8, 2> dst_2;
+        dst_2 << 0, 0,
+                 x_d / 2, 0,
+                 x_d, 0,
+                 x_d, y_d / 2,
+                 x_d, y_d,
+                 x_d / 2, y_d,
+                 0, y_d,
+                 0, y_d / 2;
+
+        Eigen::Matrix<double, 8, 2> src_2;
+        src_2 << 0, 0,
+                 w1 / 2, 0,
+                 w1, 0,
+                 w1, h1 / 2,
+                 w1, h1,
+                 w1 / 2, h1,
+                 0, h1,
+                 0, h1 / 2;
+
+        dst_2 *= ratio;
+        Eigen::Matrix3d tform = cv::estimateAffinePartial2D(src_2, dst_2).matrix();
+
+        cv::Mat tf_img;
+        cv::warpPerspective(source_img, tf_img, tform, source_img.size());
+
+        std::vector<cv::Point> circle_cord;
+        cv::findNonZero(tf_img, circle_cord);
+        std::vector<cv::Point2d> circle_cord_reshape(circle_cord.begin(), circle_cord.end());
+
+        double c_x, c_y, rad;
+        cv::fitEllipse(circle_cord_reshape).center.x;
+        cv::fitEllipse(circle_cord_reshape).center.y;
+        cv::fitEllipse(circle_cord_reshape).size.width / 2;
+
+        double radius_mm = (2 * rad) / PPM;
+        Cal_rad.push_back(radius_mm);
+
+        Eigen::VectorXd CR(combine_rad.size());
+        for (size_t i = 0; i < combine_rad.size(); i++) {
+            CR(i) = combine_rad[i];
+        }
+        CR = CR.sorted();
+        Eigen::VectorXi index_end = (CR.array() > (r + 10)).cast<int>();
+        Eigen::VectorXi index_start = (CR.array() < (r - 10)).cast<int>();
+
+        Eigen::VectorXd new_measure_radius = CR;
+        new_measure_radius.conservativeResize(new_measure_radius.size() - index_end.sum() - index_start.sum());
+
+        double ovality_cal = ((new_measure_radius.maxCoeff() - new_measure_radius.minCoeff()) / r) * 100;
+        Ovality_all.push_back(ovality_cal);
+
+        cv::Mat tf_img1;
+        tf_img.convertTo(tf_img1, CV_8UC1, 255.0);
+
+        cv::putText(img, cv::format("%.1f percentage", ovality_cal), cv::Point(100, 500), cv::FONT_HERSHEY_SIMPLEX, 0.85, cv::Scalar(0, 100, 255), 4);
+        cv::putText(img, cv::format("%.1f mm", radius_mm), cv::Point(500, 500), cv::FONT_HERSHEY_SIMPLEX, 0.85, cv::Scalar(255, 0, 255), 4);
+
+        cv::imwrite(output_img_path + img_list[ind], img);
+    }
+
+    Eigen::VectorXd Calrad(Cal_rad.size());
+    for (size_t i = 0; i < Cal_rad.size(); i++) {
+        Calrad(i) = Cal_rad[i];
+    }
+
+    double mean_dia = Calrad.mean();
+
+    Eigen::VectorXd stand_dia = Eigen::VectorXd::Map(new double[]{250, 300, 350, 400, 450, 500, 600, 700}, 8);
+    Eigen::VectorXd sub_dia = (stand_dia - mean_dia).cwiseAbs();
+
+    int P_diameter = stand_dia[sub_dia.minCoeff()];
+
+    std::cout << "The final pipe diameter is: " << P_diameter << std::endl;
+
+    std::ofstream file("Calculate_dia.npy", std::ios::binary);
+    file.write(reinterpret_cast<char*>(Calrad.data()), Calrad.size() * sizeof(double));
+    file.close();
+
+    int length = Calrad.size();
+    Eigen::VectorXd q_100 = Eigen::VectorXd::LinSpaced(length, 0, length - 1);
+    Eigen::VectorXd q_101 = Eigen::VectorXd::Constant(length, mean_dia);
+
+    cv::Mat plot_img(cv::Size(1000, 500), CV_8UC3, cv::Scalar(255, 255, 255));
+    cv::line(plot_img, cv::Point(50, 450), cv::Point(950, 450), cv::Scalar(0, 0, 0), 2);
+    cv::line(plot_img, cv::Point(50, 50), cv::Point(50, 450), cv::Scalar(0, 0, 0), 2);
+
+    for (int i = 0; i < length; i++) {
+        cv::circle(plot_img, cv::Point(50 + static_cast<int>(q_100(i) * 900 / (length - 1)), 450 - static_cast<int>(Calrad(i) * 400 / 100)), 2, cv::Scalar(0, 0, 0), -1);
+        cv::circle(plot_img, cv::Point(50 + static_cast<int>(q_100(i) * 900 / (length - 1)), 450 - static_cast<int>(q_101(i) * 400 / 100)), 2, cv::Scalar(255, 0, 0), -1);
+    }
+
+    cv::putText(plot_img, "Pipe Length", cv::Point(450, 480), cv::FONT_HERSHEY_SIMPLEX, 0.5, cv::Scalar(0, 0, 0), 1);
+    cv::putText(plot_img, "Calculated Diameter", cv::Point(10, 50), cv::FONT_HERSHEY_SIMPLEX, 0.5, cv::Scalar(0, 0, 0), 1);
+    cv::putText(plot_img, "Diameter calculation with PTZ camera", cv::Point(300, 30), cv::FONT_HERSHEY_SIMPLEX, 0.5, cv::Scalar(0, 0, 0), 1);
+
+    cv::imwrite("dia1_300mm_.jpg", plot_img);
+
+    return plot_img;
+}
+
+int main() {
+    std::string input_path = "C:/Users/User/Desktop/New folder_2902/small_wheel/mds_290/original_image/";
+    std::string output_img_path = "C:/Users/User/Desktop/New folder_2902/small_wheel/mds_290/with_homography/processed_image_250/";
+
+    cv::Mat plot_img = processImage(input_path, output_img_path);
+    cv::imshow("Plot", plot_img);
+    cv::waitKey(0);
+    cv::destroyAllWindows();
+
+    return 0;
+}
+
